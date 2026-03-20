@@ -1,0 +1,71 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: L3 - Root nested stack composing VPC, EC2, and RDS child stacks
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, staging, prod]
+    Default: dev
+
+  TemplatesBucketName:
+    Type: String
+    Description: S3 bucket containing nested stack templates
+
+  KeyPairName:
+    Type: AWS::EC2::KeyPair::KeyName
+
+Resources:
+  VPCStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplatesBucketName}.s3.amazonaws.com/nested/l3-nested-child-vpc-public-private-subnets.yaml'
+      Parameters:
+        Environment: !Ref Environment
+      TimeoutInMinutes: 15
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  EC2Stack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn: VPCStack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplatesBucketName}.s3.amazonaws.com/nested/l3-nested-child-ec2-webserver-with-userdata.yaml'
+      Parameters:
+        Environment: !Ref Environment
+        VpcId: !GetAtt VPCStack.Outputs.VpcId
+        PublicSubnetId: !GetAtt VPCStack.Outputs.PublicSubnet1Id
+        KeyPairName: !Ref KeyPairName
+      TimeoutInMinutes: 10
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  RDSStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn: VPCStack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplatesBucketName}.s3.amazonaws.com/nested/l3-nested-child-rds-mysql-multi-az.yaml'
+      Parameters:
+        Environment: !Ref Environment
+        VpcId: !GetAtt VPCStack.Outputs.VpcId
+        PrivateSubnet1Id: !GetAtt VPCStack.Outputs.PrivateSubnet1Id
+        PrivateSubnet2Id: !GetAtt VPCStack.Outputs.PrivateSubnet2Id
+        EC2SecurityGroupId: !GetAtt EC2Stack.Outputs.SecurityGroupId
+      TimeoutInMinutes: 20
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+Outputs:
+  VpcId:
+    Description: VPC created by nested VPC stack
+    Value: !GetAtt VPCStack.Outputs.VpcId
+
+  EC2InstanceId:
+    Description: EC2 instance from nested compute stack
+    Value: !GetAtt EC2Stack.Outputs.InstanceId
+
+  RDSEndpoint:
+    Description: RDS endpoint from nested database stack
+    Value: !GetAtt RDSStack.Outputs.DBEndpoint
