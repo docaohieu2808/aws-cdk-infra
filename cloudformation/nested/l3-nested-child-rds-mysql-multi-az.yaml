@@ -1,0 +1,127 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  L3 Child - RDS MySQL Multi-AZ instance in private subnets.
+  Receives VpcId, PrivateSubnet1Id, PrivateSubnet2Id, and EC2SecurityGroupId
+  from the root stack (sourced from VPC and EC2 child stacks).
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, staging, prod]
+    Default: dev
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC ID passed from the VPC child stack
+
+  PrivateSubnet1Id:
+    Type: AWS::EC2::Subnet::Id
+    Description: Private subnet 1 — RDS primary AZ
+
+  PrivateSubnet2Id:
+    Type: AWS::EC2::Subnet::Id
+    Description: Private subnet 2 — RDS standby AZ (Multi-AZ failover)
+
+  EC2SecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Webserver SG ID — allowed to connect to MySQL port 3306
+
+Mappings:
+  DBInstanceClassMap:
+    dev:
+      DBInstanceClass: db.t3.micro
+      AllocatedStorage: '20'
+      MultiAZ: 'false'
+    staging:
+      DBInstanceClass: db.t3.small
+      AllocatedStorage: '50'
+      MultiAZ: 'false'
+    prod:
+      DBInstanceClass: db.t3.medium
+      AllocatedStorage: '100'
+      MultiAZ: 'true'
+
+Conditions:
+  IsProd: !Equals [!Ref Environment, prod]
+
+Resources:
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: !Sub 'RDS subnet group — ${Environment}'
+      SubnetIds:
+        - !Ref PrivateSubnet1Id
+        - !Ref PrivateSubnet2Id
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  DBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub 'RDS MySQL SG — ${Environment} (port 3306 from webserver only)'
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !Ref EC2SecurityGroupId
+          Description: MySQL from webserver SG only
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  DBMasterSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub '/${Environment}/rds/mysql/master'
+      Description: !Sub 'RDS MySQL master credentials — ${Environment}'
+      GenerateSecretString:
+        SecretStringTemplate: '{"username": "admin"}'
+        GenerateStringKey: password
+        PasswordLength: 32
+        ExcludeCharacters: '"@/\'
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  DBInstance:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: !Sub '${Environment}-mysql'
+      DBInstanceClass: !FindInMap [DBInstanceClassMap, !Ref Environment, DBInstanceClass]
+      Engine: mysql
+      EngineVersion: '8.0'
+      AllocatedStorage: !FindInMap [DBInstanceClassMap, !Ref Environment, AllocatedStorage]
+      StorageType: gp3
+      StorageEncrypted: true
+      MultiAZ: !FindInMap [DBInstanceClassMap, !Ref Environment, MultiAZ]
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VPCSecurityGroups:
+        - !Ref DBSecurityGroup
+      MasterUsername: !Sub '{{resolve:secretsmanager:${DBMasterSecret}:SecretString:username}}'
+      MasterUserPassword: !Sub '{{resolve:secretsmanager:${DBMasterSecret}:SecretString:password}}'
+      BackupRetentionPeriod: !If [IsProd, 7, 1]
+      EnableIAMDatabaseAuthentication: true
+      PubliclyAccessible: false
+      AutoMinorVersionUpgrade: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${Environment}-mysql'
+        - Key: Environment
+          Value: !Ref Environment
+
+Outputs:
+  DBEndpoint:
+    Description: RDS endpoint hostname — returned to root stack
+    Value: !GetAtt DBInstance.Endpoint.Address
+
+  DBPort:
+    Description: RDS port
+    Value: !GetAtt DBInstance.Endpoint.Port
+
+  DBSecretArn:
+    Description: Secrets Manager ARN for RDS master credentials
+    Value: !Ref DBMasterSecret
