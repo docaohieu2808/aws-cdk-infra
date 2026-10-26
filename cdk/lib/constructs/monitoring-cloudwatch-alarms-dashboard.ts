@@ -1,6 +1,8 @@
 import * as cdk from 'aws-cdk-lib';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import * as actions from 'aws-cdk-lib/aws-cloudwatch-actions';
+import * as iam from 'aws-cdk-lib/aws-iam';
+import * as kms from 'aws-cdk-lib/aws-kms';
 import * as sns from 'aws-cdk-lib/aws-sns';
 import * as subscriptions from 'aws-cdk-lib/aws-sns-subscriptions';
 import { Construct } from 'constructs';
@@ -31,9 +33,23 @@ export class Monitoring extends Construct {
 
     const { serviceName, alarmEmail, albFullName, asgName, dynamoTableName } = props;
 
-    // SNS topic for alarm actions
+    // SNS topic for alarm actions, encrypted with a customer-managed key: CloudWatch cannot publish to a topic
+    // that uses the AWS-managed alias/aws/sns key, so the key policy must allow the CloudWatch service.
+    const topicKey = new kms.Key(this, 'AlarmTopicKey', {
+      description: `${serviceName} alarm topic`,
+      enableKeyRotation: true,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+    topicKey.addToResourcePolicy(
+      new iam.PolicyStatement({
+        principals: [new iam.ServicePrincipal('cloudwatch.amazonaws.com')],
+        actions: ['kms:Decrypt', 'kms:GenerateDataKey*'],
+        resources: ['*'],
+      })
+    );
     this.alarmTopic = new sns.Topic(this, 'AlarmTopic', {
       displayName: `${serviceName}-alarms`,
+      masterKey: topicKey,
     });
 
     if (alarmEmail) {

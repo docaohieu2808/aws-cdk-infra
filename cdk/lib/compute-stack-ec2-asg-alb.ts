@@ -4,7 +4,9 @@ import * as autoscaling from 'aws-cdk-lib/aws-autoscaling';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import { Construct } from 'constructs';
+import * as cwActions from 'aws-cdk-lib/aws-cloudwatch-actions';
 import { WebService } from './constructs/web-service-alb-asg-health-check';
+import { Monitoring } from './constructs/monitoring-cloudwatch-alarms-dashboard';
 
 interface ComputeStackProps extends cdk.StackProps {
   vpc: ec2.Vpc;
@@ -39,9 +41,16 @@ export class ComputeStack extends cdk.Stack {
       instanceType: ec2.InstanceType.of(ec2.InstanceClass.T3, ec2.InstanceSize.SMALL),
       minCapacity: 1,
       maxCapacity: 4,
-      desiredCapacity: 2,
       healthCheckPath: '/health',
     });
+
+    // Alarms on 5xx, latency and CPU, one SNS topic, one dashboard; the unhealthy-host alarm notifies the same topic.
+    const monitoring = new Monitoring(this, 'Monitoring', {
+      serviceName: `${this.stackName}-web`,
+      albFullName: webService.alb.loadBalancerFullName,
+      asgName: webService.asg.autoScalingGroupName,
+    });
+    webService.unhealthyHostAlarm.addAlarmAction(new cwActions.SnsAction(monitoring.alarmTopic));
 
     this.alb = webService.alb;
     this.asg = webService.asg;

@@ -14,7 +14,6 @@ export interface WebServiceProps {
   instanceType?: ec2.InstanceType;
   minCapacity?: number;
   maxCapacity?: number;
-  desiredCapacity?: number;
   healthCheckPath?: string;
 }
 
@@ -27,6 +26,7 @@ export class WebService extends Construct {
   public readonly asg: autoscaling.AutoScalingGroup;
   public readonly listener: elbv2.ApplicationListener;
   public readonly targetGroup: elbv2.ApplicationTargetGroup;
+  public readonly unhealthyHostAlarm: cloudwatch.Alarm;
 
   constructor(scope: Construct, id: string, props: WebServiceProps) {
     super(scope, id);
@@ -39,7 +39,6 @@ export class WebService extends Construct {
       instanceType = ec2.InstanceType.of(ec2.InstanceClass.T3, ec2.InstanceSize.SMALL),
       minCapacity = 1,
       maxCapacity = 4,
-      desiredCapacity = 2,
       healthCheckPath = '/health',
     } = props;
 
@@ -50,16 +49,34 @@ export class WebService extends Construct {
       securityGroup: albSecurityGroup,
       vpcSubnets: { subnetType: ec2.SubnetType.PUBLIC },
       deletionProtection: false,
+      dropInvalidHeaderFields: true,
     });
 
     this.listener = this.alb.addListener('HttpListener', {
       port: 80,
       open: true,
-      defaultAction: elbv2.ListenerAction.fixedResponse(200, {
-        contentType: 'text/plain',
-        messageBody: 'OK',
-      }),
     });
+
+    // The instances serve the target group's health check themselves: a tiny HTTP server on 8080 answers /health.
+    // Without something listening, the ELB health check would fail and the ASG would replace every instance forever.
+    const userData = ec2.UserData.forLinux();
+    userData.addCommands(
+      'mkdir -p /opt/app',
+      'echo ok > /opt/app/health',
+      'cat > /etc/systemd/system/app.service <<EOF',
+      '[Unit]',
+      'Description=Demo app (static /health)',
+      'After=network.target',
+      '[Service]',
+      'WorkingDirectory=/opt/app',
+      'ExecStart=/usr/bin/python3 -m http.server 8080',
+      'Restart=always',
+      '[Install]',
+      'WantedBy=multi-user.target',
+      'EOF',
+      'systemctl daemon-reload',
+      'systemctl enable --now app.service',
+    );
 
     // Launch template
     const launchTemplate = new ec2.LaunchTemplate(this, 'LaunchTemplate', {
@@ -67,7 +84,7 @@ export class WebService extends Construct {
       machineImage: ec2.MachineImage.latestAmazonLinux2023(),
       securityGroup: appSecurityGroup,
       role: instanceRole,
-      userData: ec2.UserData.forLinux(),
+      userData,
       requireImdsv2: true,
       detailedMonitoring: false,
     });
@@ -78,9 +95,11 @@ export class WebService extends Construct {
       launchTemplate,
       minCapacity,
       maxCapacity,
-      desiredCapacity,
       vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
-      healthCheck: autoscaling.HealthCheck.elb({ grace: cdk.Duration.seconds(60) }),
+      healthChecks: autoscaling.HealthChecks.withAdditionalChecks({
+        additionalTypes: [autoscaling.AdditionalHealthCheckType.ELB],
+        gracePeriod: cdk.Duration.seconds(60),
+      }),
       updatePolicy: autoscaling.UpdatePolicy.rollingUpdate({
         maxBatchSize: 1,
         minInstancesInService: 1,
@@ -116,8 +135,8 @@ export class WebService extends Construct {
     });
 
     // Alarm: unhealthy host count
-    new cloudwatch.Alarm(this, 'UnhealthyHostAlarm', {
-      metric: this.targetGroup.metricUnhealthyHostCount(),
+    this.unhealthyHostAlarm = new cloudwatch.Alarm(this, 'UnhealthyHostAlarm', {
+      metric: this.targetGroup.metrics.unhealthyHostCount(),
       threshold: 1,
       evaluationPeriods: 2,
       comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,

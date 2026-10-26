@@ -2,6 +2,7 @@ import * as cdk from 'aws-cdk-lib';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import { Construct } from 'constructs';
 import { SecureBucket } from './constructs/secure-bucket-encrypted-lifecycle-versioning';
+import { Monitoring } from './constructs/monitoring-cloudwatch-alarms-dashboard';
 
 export class StorageStack extends cdk.Stack {
   public readonly appBucket: cdk.aws_s3.Bucket;
@@ -38,7 +39,7 @@ export class StorageStack extends cdk.Stack {
       sortKey: { name: 'sk', type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       encryption: dynamodb.TableEncryption.AWS_MANAGED,
-      pointInTimeRecovery: true,
+      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
       removalPolicy: cdk.RemovalPolicy.RETAIN,
       timeToLiveAttribute: 'ttl',
     });
@@ -49,6 +50,12 @@ export class StorageStack extends cdk.Stack {
       partitionKey: { name: 'sk', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'pk', type: dynamodb.AttributeType.STRING },
       projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    // Alarms (throttling) and a dashboard for the table
+    new Monitoring(this, 'Monitoring', {
+      serviceName: `${this.stackName}-storage`,
+      dynamoTableName: this.table.tableName,
     });
 
     new cdk.CfnOutput(this, 'BucketName', { value: this.appBucket.bucketName });

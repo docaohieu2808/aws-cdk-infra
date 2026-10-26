@@ -20,6 +20,11 @@ Parameters:
     Type: AWS::EC2::Subnet::Id
     Description: Subnet to launch instance into
 
+  LatestAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+    Description: Amazon Linux 2023 AMI, resolved from the public SSM parameter at deploy time (no hard-coded AMI IDs)
+
   EnableMonitoring:
     Type: String
     AllowedValues: ['true', 'false']
@@ -38,18 +43,10 @@ Mappings:
       InstanceType: t3.medium
       VolumeSize: 80
 
-  RegionAMIMap:
-    us-east-1:
-      AMI: ami-0c02fb55956c7d316
-    us-west-2:
-      AMI: ami-0892d3c7ee96c0bf7
-    eu-west-1:
-      AMI: ami-08ca3fed11864d6bb
-    ap-southeast-1:
-      AMI: ami-0d058fe428540cd89
 
 Conditions:
   IsProd: !Equals [!Ref Environment, prod]
+  IsNotProd: !Not [!Equals [!Ref Environment, prod]]
   IsMonitoringEnabled: !Equals [!Ref EnableMonitoring, 'true']
   CreateElasticIP: !Or
     - !Equals [!Ref Environment, staging]
@@ -66,16 +63,22 @@ Resources:
           FromPort: 22
           ToPort: 22
           CidrIp: 10.0.0.0/8
-        - !If
-          - IsProd
-          - !Ref AWS::NoValue
-          - IpProtocol: tcp
-            FromPort: 8080
-            ToPort: 8080
-            CidrIp: 0.0.0.0/0
+          Description: SSH from internal networks only
       Tags:
         - Key: Environment
           Value: !Ref Environment
+
+  # Open to the world only outside prod, so it is its own conditional resource
+  AppPortIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: IsNotProd
+    Properties:
+      GroupId: !Ref EC2SecurityGroup
+      IpProtocol: tcp
+      FromPort: 8080
+      ToPort: 8080
+      CidrIp: 0.0.0.0/0
+      Description: App port from anywhere (dev and staging only)
 
   EC2InstanceRole:
     Type: AWS::IAM::Role
@@ -103,7 +106,7 @@ Resources:
   EC2Instance:
     Type: AWS::EC2::Instance
     Properties:
-      ImageId: !FindInMap [RegionAMIMap, !Ref 'AWS::Region', AMI]
+      ImageId: !Ref LatestAmiId
       InstanceType: !FindInMap [EnvironmentInstanceTypeMap, !Ref Environment, InstanceType]
       KeyName: !Ref KeyPairName
       SubnetId: !Ref SubnetId
@@ -111,18 +114,21 @@ Resources:
         - !Ref EC2SecurityGroup
       IamInstanceProfile: !Ref EC2InstanceProfile
       Monitoring: !If [IsMonitoringEnabled, true, false]
+      MetadataOptions:
+        HttpTokens: required
+        HttpEndpoint: enabled
       BlockDeviceMappings:
         - DeviceName: /dev/xvda
           Ebs:
             VolumeSize: !FindInMap [EnvironmentInstanceTypeMap, !Ref Environment, VolumeSize]
             VolumeType: gp3
-            Encrypted: !If [IsProd, true, false]
+            Encrypted: true
             DeleteOnTermination: true
       UserData:
         Fn::Base64: !Sub |
           #!/bin/bash
-          yum update -y
-          yum install -y amazon-cloudwatch-agent
+          dnf update -y
+          dnf install -y amazon-cloudwatch-agent
           echo "Environment: ${Environment}" > /etc/instance-env
       Tags:
         - Key: Name

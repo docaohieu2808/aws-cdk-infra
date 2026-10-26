@@ -1,0 +1,113 @@
+# Proves every level of the repo works without an AWS account, on every push and once a week (so a new CDK, cfn-lint
+# or checkov release that breaks it shows up here):
+# - lint:           actionlint, and every action is pinned to a real commit SHA;
+# - cloudformation: cfn-lint and checkov on the hand-written L1/L2/L3 templates;
+# - cdk:            npm ci, tsc, jest assertion tests (incl. security properties), `cdk synth` of every stack offline,
+#                   cfn-lint and checkov on the synthesized templates, and a check that cdk.json carries the
+#                   recommended feature-flag set of the installed CDK.
+# Nothing is deployed: that needs an AWS account (and, for the pipeline, an approved GitHub connection).
+name: ci
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "41 2 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "24"
+  CFN_LINT_VERSION: "1.58.0"
+  CHECKOV_VERSION: "3.3.30"
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: actionlint
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+        run: |
+          bash <(curl -sSfL "https://raw.githubusercontent.com/rhysd/actionlint/v${ACTIONLINT_VERSION}/scripts/download-actionlint.bash") "$ACTIONLINT_VERSION"
+          ./actionlint -color
+      - name: Every action is pinned to a commit SHA that exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # An annotated tag object's SHA looks like a commit SHA but fails when a job runs, so ask the API.
+          refs=$(grep -rhE '^[[:space:]]*(- )?uses: *[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@' .github \
+            | sed -E 's/^[[:space:]]*(- )?uses: *//; s/[[:space:]].*$//' | sort -u)
+          status=0
+          while IFS=@ read -r ref sha; do
+            repo=$(echo "$ref" | cut -d/ -f1-2)
+            if ! [[ "$sha" =~ ^[0-9a-f]{40}$ ]]; then echo "FAIL $ref@$sha is not pinned to a SHA"; status=1
+            elif gh api "repos/$repo/commits/$sha" --jq .sha >/dev/null 2>&1; then echo "ok   $ref@$sha"
+            else echo "FAIL $ref@$sha is not a commit"; status=1; fi
+          done <<< "$refs"
+          exit "$status"
+
+  cloudformation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install cfn-lint and checkov
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install --quiet "cfn-lint==${CFN_LINT_VERSION}" "checkov==${CHECKOV_VERSION}"
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
+      - name: cfn-lint (hand-written templates, no warnings allowed)
+        run: cfn-lint cloudformation/*.yaml cloudformation/nested/*.yaml
+      - name: checkov (skips are listed and justified in .checkov.yaml)
+        run: checkov -d cloudformation --config-file .checkov.yaml
+
+  cdk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: cdk
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: cdk/package-lock.json
+      - run: npm ci
+      - run: npx tsc
+      - name: Unit tests (aws-cdk-lib/assertions)
+        run: npm test
+      - name: cdk synth, all stacks, offline
+        # No AWS credentials and no account/region: the stacks are environment-agnostic, so there are no lookups.
+        # The PipelineStack uses its marked placeholder connection ARN and prints a warning.
+        run: npx cdk synth --quiet --no-notices
+      - name: cdk.json carries the recommended feature flags of the installed CDK
+        run: |
+          npx cdk flags --unstable=flags --no-notices | tee "$RUNNER_TEMP/flags.txt"
+          if grep -q "Module:" "$RUNNER_TEMP/flags.txt"; then
+            echo "::error::cdk.json is missing recommended feature flags: add them to the context block"
+            exit 1
+          fi
+      - name: Install cfn-lint and checkov
+        working-directory: .
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install --quiet "cfn-lint==${CFN_LINT_VERSION}" "checkov==${CHECKOV_VERSION}"
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
+      - name: cfn-lint on the synthesized templates
+        # W3005 (DependsOn already implied by a GetAtt) comes from CDK's own generated resources, not from this repo.
+        run: find cdk.out -name '*.template.json' -print0 | xargs -0 cfn-lint --ignore-checks W3005
+      - name: checkov on the synthesized templates
+        working-directory: .
+        run: checkov -d cdk/cdk.out --config-file .checkov.yaml

@@ -28,7 +28,6 @@ Resources:
 
   EC2Stack:
     Type: AWS::CloudFormation::Stack
-    DependsOn: VPCStack
     Properties:
       TemplateURL: !Sub 'https://${TemplatesBucketName}.s3.amazonaws.com/nested/l3-nested-child-ec2-webserver-with-userdata.yaml'
       Parameters:
@@ -43,7 +42,6 @@ Resources:
 
   RDSStack:
     Type: AWS::CloudFormation::Stack
-    DependsOn: VPCStack
     Properties:
       TemplateURL: !Sub 'https://${TemplatesBucketName}.s3.amazonaws.com/nested/l3-nested-child-rds-mysql-multi-az.yaml'
       Parameters:

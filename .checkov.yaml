@@ -1,0 +1,25 @@
+# checkov settings for CI: scans the CloudFormation templates AND the templates synthesized by `cdk synth`.
+# Every skip below is a deliberate demo trade-off or something owned by the CDK framework, not an oversight.
+framework:
+  - cloudformation
+quiet: true
+compact: true
+skip-check:
+  # Public demo load balancer: HTTP only, because there is no domain/certificate in this repo
+  - CKV_AWS_2    # ALB listener is HTTP, not HTTPS
+  - CKV_AWS_103  # no TLS listener, so no TLS policy
+  - CKV_AWS_260  # security groups open port 80 to the internet on purpose (the ALB / the demo web server)
+  - CKV_AWS_91   # ALB access logs need a bucket with a policy per region; out of scope for the demo
+  # Cost / complexity trade-offs, documented in the README
+  - CKV_AWS_119  # DynamoDB uses the AWS-managed key, not a customer-managed one
+  - CKV_AWS_158  # VPC flow-log group uses CloudWatch default encryption
+  - CKV_AWS_18   # the access-log bucket does not log to another bucket (that would never end)
+  - CKV_AWS_21   # the access-log bucket is not versioned (it expires objects after 90 days)
+  - CKV_AWS_149  # RDS master secret uses the AWS-managed Secrets Manager key
+  - CKV_AWS_157  # RDS Multi-AZ is on for staging/prod only; dev is single-AZ to save cost
+  - CKV_AWS_118  # RDS enhanced monitoring needs an extra IAM role; CloudWatch basic metrics are enough here
+  # Owned by the CDK framework (VPC default-SG restriction provider, CodePipeline asset roles), not by this repo
+  - CKV_AWS_115
+  - CKV_AWS_116
+  - CKV_AWS_117
+  - CKV_AWS_111

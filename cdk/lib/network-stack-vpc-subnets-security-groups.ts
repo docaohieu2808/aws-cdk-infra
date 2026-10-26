@@ -24,11 +24,6 @@ export class NetworkStack extends cdk.Stack {
           subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
           cidrMask: 24,
         },
-        {
-          name: 'Isolated',
-          subnetType: ec2.SubnetType.PRIVATE_ISOLATED,
-          cidrMask: 24,
-        },
       ],
       natGateways: 1,
       enableDnsHostnames: true,
@@ -41,7 +36,7 @@ export class NetworkStack extends cdk.Stack {
       allowAllOutbound: true,
     });
     this.albSecurityGroup.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(80), 'Allow HTTP');
-    this.albSecurityGroup.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(443), 'Allow HTTPS');
+    // HTTP only: the ALB has no certificate in this demo, so opening 443 would only mislead.
 
     this.appSecurityGroup = new ec2.SecurityGroup(this, 'AppSecurityGroup', {
       vpc: this.vpc,

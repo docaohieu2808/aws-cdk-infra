@@ -1,9 +1,14 @@
 import * as cdk from 'aws-cdk-lib';
+import * as codepipeline from 'aws-cdk-lib/aws-codepipeline';
 import * as pipelines from 'aws-cdk-lib/pipelines';
 import { Construct } from 'constructs';
 import { NetworkStack } from '../lib/network-stack-vpc-subnets-security-groups';
 import { ComputeStack } from '../lib/compute-stack-ec2-asg-alb';
 import { StorageStack } from '../lib/storage-stack-s3-dynamodb';
+
+/** Obviously fake ARN used only so the pipeline can be synthesized without a real connection. */
+export const PLACEHOLDER_CONNECTION_ARN =
+  'arn:aws:codestar-connections:us-east-1:000000000000:connection/00000000-0000-0000-0000-000000000000';
 
 /**
  * Application stage: groups all app stacks for a given environment.
@@ -20,7 +25,6 @@ class AppStage extends cdk.Stage {
       appSecurityGroup: networkStack.appSecurityGroup,
       albSecurityGroup: networkStack.albSecurityGroup,
     });
-    computeStack.addDependency(networkStack);
 
     new StorageStack(this, 'StorageStack');
   }
@@ -39,50 +43,54 @@ class AppStage extends cdk.Stage {
  *   2. Approve the connection (pending → available) via the Console.
  *   3. Pass the connection ARN via CDK context or environment variable:
  *        cdk deploy -c githubConnectionArn=arn:aws:codestar-connections:...
+ *      (without it the stack synthesizes with a placeholder and cannot be deployed).
  */
 export class PipelineStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
 
-    // Resolve GitHub CodeStar Connection ARN from context (preferred) or env var.
-    // Set via: cdk deploy -c githubConnectionArn=arn:aws:codestar-connections:...
-    // or: export CDK_GITHUB_CONNECTION_ARN=arn:aws:codestar-connections:...
-    const connectionArn =
-      this.node.tryGetContext('githubConnectionArn') ??
-      process.env.CDK_GITHUB_CONNECTION_ARN;
-
-    if (!connectionArn) {
-      throw new Error(
-        'GitHub CodeStar Connection ARN is required. ' +
-        'Pass via: cdk deploy -c githubConnectionArn=<arn> ' +
-        'or set CDK_GITHUB_CONNECTION_ARN env var. ' +
-        'Create the connection in: AWS Console → CodePipeline → Settings → Connections.'
+    // Resolve the GitHub CodeStar Connection ARN from context (preferred) or env var:
+    //   cdk deploy -c githubConnectionArn=arn:aws:codestar-connections:...
+    //   export CDK_GITHUB_CONNECTION_ARN=arn:aws:codestar-connections:...
+    // When neither is set the stack still synthesizes (CI, `cdk synth`, tests) using PLACEHOLDER_CONNECTION_ARN and
+    // a warning is attached; deploying that template fails in CloudFormation because the connection does not exist.
+    const suppliedArn: string | undefined =
+      this.node.tryGetContext('githubConnectionArn') ?? process.env.CDK_GITHUB_CONNECTION_ARN;
+    const connectionArn = suppliedArn ?? PLACEHOLDER_CONNECTION_ARN;
+    if (!suppliedArn) {
+      cdk.Annotations.of(this).addWarning(
+        'No GitHub CodeStar connection ARN supplied (-c githubConnectionArn=... or CDK_GITHUB_CONNECTION_ARN): ' +
+          'using a PLACEHOLDER. Synth works, deploy will fail until a real, approved connection is given. ' +
+          'Create it in: AWS Console > CodePipeline > Settings > Connections.'
       );
     }
 
-    // GitHub source via CodeStar Connection — replaces CodeCommit.
-    // Repo format: 'owner/repo-name'
     const githubOwner =
-      this.node.tryGetContext('githubOwner') ??
-      process.env.CDK_GITHUB_OWNER ??
-      'your-org';
+      this.node.tryGetContext('githubOwner') ?? process.env.CDK_GITHUB_OWNER ?? 'docaohieu2808';
     const githubRepo =
-      this.node.tryGetContext('githubRepo') ??
-      process.env.CDK_GITHUB_REPO ??
-      'aws-cdk-infra';
+      this.node.tryGetContext('githubRepo') ?? process.env.CDK_GITHUB_REPO ?? 'aws-cdk-infra';
+    const githubBranch =
+      this.node.tryGetContext('githubBranch') ?? process.env.CDK_GITHUB_BRANCH ?? 'master';
 
-    const source = pipelines.CodePipelineSource.connection(
-      `${githubOwner}/${githubRepo}`,
-      'main',
-      { connectionArn }
-    );
+    const source = pipelines.CodePipelineSource.connection(`${githubOwner}/${githubRepo}`, githubBranch, {
+      connectionArn,
+    });
 
     const pipeline = new pipelines.CodePipeline(this, 'Pipeline', {
       pipelineName: 'aws-cdk-infra-pipeline',
+      pipelineType: codepipeline.PipelineType.V2,
       selfMutation: true,
       crossAccountKeys: false,
       synth: new pipelines.ShellStep('Synth', {
         input: source,
+        // The synth step runs `cdk synth` inside CodeBuild, where this stack is built again: pass the same
+        // settings through the environment so it produces the same pipeline.
+        env: {
+          CDK_GITHUB_CONNECTION_ARN: connectionArn,
+          CDK_GITHUB_OWNER: githubOwner,
+          CDK_GITHUB_REPO: githubRepo,
+          CDK_GITHUB_BRANCH: githubBranch,
+        },
         commands: [
           'cd cdk',
           'npm ci',
@@ -134,7 +142,7 @@ export class PipelineStack extends cdk.Stack {
     );
 
     new cdk.CfnOutput(this, 'PipelineSourceInfo', {
-      value: `${githubOwner}/${githubRepo} (main) via CodeStar Connection`,
+      value: `${githubOwner}/${githubRepo} (${githubBranch}) via CodeStar Connection`,
       description: 'GitHub source for this CDK Pipeline',
     });
   }

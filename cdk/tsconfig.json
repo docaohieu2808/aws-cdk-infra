@@ -1,19 +1,39 @@
 {
   "compilerOptions": {
-    "target": "ES2020",
-    "module": "commonjs",
-    "lib": ["es2020"],
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": [
+      "es2022"
+    ],
     "declaration": true,
     "strict": true,
     "noImplicitAny": true,
     "strictNullChecks": true,
     "noImplicitThis": true,
     "alwaysStrict": true,
-    "outDir": "./dist",
-    "rootDir": ".",
-    "esModuleInterop": true,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": false,
+    "inlineSourceMap": true,
+    "inlineSources": true,
+    "experimentalDecorators": true,
+    "strictPropertyInitialization": false,
     "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true
+    "typeRoots": [
+      "./node_modules/@types"
+    ],
+    "noEmit": true,
+    "isolatedModules": true,
+    "types": [
+      "jest",
+      "node"
+    ]
   },
-  "exclude": ["node_modules", "dist", "cdk.out"]
+  "include": ["bin/**/*.ts", "lib/**/*.ts", "pipeline/**/*.ts", "custom-resources/**/*.ts", "test/**/*.ts"],
+  "exclude": [
+    "node_modules",
+    "cdk.out"
+  ]
 }

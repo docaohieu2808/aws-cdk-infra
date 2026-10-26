@@ -25,7 +25,6 @@ const computeStack = new ComputeStack(app, 'ComputeStack', {
   appSecurityGroup: networkStack.appSecurityGroup,
   albSecurityGroup: networkStack.albSecurityGroup,
 });
-computeStack.addDependency(networkStack);
 
 const storageStack = new StorageStack(app, 'StorageStack', {
   env,

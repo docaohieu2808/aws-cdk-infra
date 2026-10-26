@@ -14,13 +14,20 @@ export interface DnsValidatorProps {
 }
 
 /**
- * MAX Construct: Lambda-backed custom resource that validates a DNS record
- * exists in Route 53 before stack creation proceeds. Uses AwsCustomResource
- * (SDK call) for lightweight implementation without a separate Lambda function.
+ * MAX Construct: custom resource that looks a record up in Route 53 at deploy time and exposes what it found.
+ * Uses AwsCustomResource (an SDK call) instead of a hand-written Lambda.
+ *
+ * ListResourceRecordSets returns the first record AT OR AFTER the requested name, so a missing record yields the
+ * next one rather than an error. That is why the matched name and type are exposed too: compare them to what you
+ * asked for before trusting `recordValue`.
  */
 export class DnsValidator extends Construct {
   /** The resolved DNS record value returned by Route 53 */
   public readonly recordValue: string;
+  /** Name of the record Route 53 returned (with trailing dot) */
+  public readonly matchedName: string;
+  /** Type of the record Route 53 returned */
+  public readonly matchedType: string;
 
   constructor(scope: Construct, id: string, props: DnsValidatorProps) {
     super(scope, id);
@@ -40,7 +47,13 @@ export class DnsValidator extends Construct {
                 'route53:ListResourceRecordSets',
                 'route53:GetHostedZone',
               ],
-              resources: [`arn:aws:route53:::hostedzone/${hostedZoneId}`],
+              resources: [
+                // partition-aware, so it also works in aws-cn and aws-us-gov
+                cdk.Arn.format(
+                  { service: 'route53', resource: 'hostedzone', resourceName: hostedZoneId, region: '', account: '' },
+                  cdk.Stack.of(this)
+                ),
+              ],
             }),
           ],
         }),
@@ -49,7 +62,7 @@ export class DnsValidator extends Construct {
 
     // AwsCustomResource: calls Route53 ListResourceRecordSets on Create/Update
     const dnsLookup = new cr.AwsCustomResource(this, 'DnsLookup', {
-      logRetention: logs.RetentionDays.ONE_WEEK,
+      logGroup: new logs.LogGroup(this, 'DnsLookupLogs', { retention: logs.RetentionDays.ONE_WEEK }),
       role: dnsValidatorRole,
       onCreate: {
         service: 'Route53',
@@ -82,8 +95,10 @@ export class DnsValidator extends Construct {
     this.recordValue = dnsLookup.getResponseField(
       'ResourceRecordSets.0.ResourceRecords.0.Value'
     );
+    this.matchedName = dnsLookup.getResponseField('ResourceRecordSets.0.Name');
+    this.matchedType = dnsLookup.getResponseField('ResourceRecordSets.0.Type');
 
-    new cdk.CfnOutput(scope, 'DnsValidatorRecordValue', {
+    new cdk.CfnOutput(this, 'DnsValidatorRecordValue', {
       value: this.recordValue,
       description: `Resolved ${recordType} record for ${domainName}`,
     });

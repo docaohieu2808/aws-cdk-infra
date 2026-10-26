@@ -48,7 +48,7 @@ Resources:
   DBSubnetGroup:
     Type: AWS::RDS::DBSubnetGroup
     Properties:
-      DBSubnetGroupDescription: !Sub 'RDS subnet group — ${Environment}'
+      DBSubnetGroupDescription: !Sub 'RDS subnet group - ${Environment}'
       SubnetIds:
         - !Ref PrivateSubnet1Id
         - !Ref PrivateSubnet2Id
@@ -59,7 +59,7 @@ Resources:
   DBSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: !Sub 'RDS MySQL SG — ${Environment} (port 3306 from webserver only)'
+      GroupDescription: !Sub 'RDS MySQL SG - ${Environment} (port 3306 from webserver only)'
       VpcId: !Ref VpcId
       SecurityGroupIngress:
         - IpProtocol: tcp
@@ -75,7 +75,7 @@ Resources:
     Type: AWS::SecretsManager::Secret
     Properties:
       Name: !Sub '/${Environment}/rds/mysql/master'
-      Description: !Sub 'RDS MySQL master credentials — ${Environment}'
+      Description: !Sub 'RDS MySQL master credentials - ${Environment}'
       GenerateSecretString:
         SecretStringTemplate: '{"username": "admin"}'
         GenerateStringKey: password
@@ -93,7 +93,7 @@ Resources:
       DBInstanceIdentifier: !Sub '${Environment}-mysql'
       DBInstanceClass: !FindInMap [DBInstanceClassMap, !Ref Environment, DBInstanceClass]
       Engine: mysql
-      EngineVersion: '8.0'
+      EngineVersion: '8.4.11'
       AllocatedStorage: !FindInMap [DBInstanceClassMap, !Ref Environment, AllocatedStorage]
       StorageType: gp3
       StorageEncrypted: true
@@ -112,6 +112,14 @@ Resources:
           Value: !Sub '${Environment}-mysql'
         - Key: Environment
           Value: !Ref Environment
+
+  # Links the secret to the instance so rotation knows the host and port.
+  DBSecretAttachment:
+    Type: AWS::SecretsManager::SecretTargetAttachment
+    Properties:
+      SecretId: !Ref DBMasterSecret
+      TargetId: !Ref DBInstance
+      TargetType: AWS::RDS::DBInstance
 
 Outputs:
   DBEndpoint:
