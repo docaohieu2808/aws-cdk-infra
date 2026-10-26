@@ -11,3 +11,7 @@ updates:
     groups:
       aws-cdk:
         patterns: ["aws-cdk", "aws-cdk-lib", "constructs"]
+    # @types/node follows the Node major the project runs on (24 LTS); a new major is a runtime decision.
+    ignore:
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
