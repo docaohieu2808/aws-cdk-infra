@@ -107,7 +107,8 @@ jobs:
           echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
       - name: cfn-lint on the synthesized templates
         # W3005 (DependsOn already implied by a GetAtt) comes from CDK's own generated resources, not from this repo.
-        run: find cdk.out -name '*.template.json' -print0 | xargs -0 cfn-lint --ignore-checks W3005
+        # Files first: --ignore-checks takes a list and would swallow a file name placed after it.
+        run: cfn-lint $(find cdk.out -name '*.template.json') --ignore-checks W3005
       - name: checkov on the synthesized templates
         working-directory: .
         run: checkov -d cdk/cdk.out --config-file .checkov.yaml
